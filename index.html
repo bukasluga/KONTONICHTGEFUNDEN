@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Franklin Cicek</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #000000;
+            font-family: Arial, sans-serif;
+            color: #ffffff;
+        }
+
+        h1 {
+            color: #ffffff;
+            text-align: center;
+            margin: 0 0 20px;
+            font-size: 2.5rem;
+        }
+
+        canvas {
+            display: block;
+            width: min(90vw, 480px);
+            height: auto;
+            border: 4px solid rgba(255,255,255,0.7);
+            border-radius: 12px;
+            background: linear-gradient(#78d6ff, #d8f3ff);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .hud {
+            margin-top: 12px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .layout {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .side-image {
+            width: 220px;
+            height: 220px;
+            object-fit: cover;
+            border-radius: 20px;
+            animation: spin 8s linear infinite;
+        }
+
+        .side-image-right {
+            width: 220px;
+            height: 220px;
+            object-fit: cover;
+            border-radius: 20px;
+            animation: spin 8s linear infinite;
+        }
+
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+    </style>
+</head>
+<body>
+    <h1>Franklin Cicek</h1>
+    <img id="album-cover" src="https://upload.wikimedia.org/wikipedia/en/5/51/Igor_-_Tyler%2C_the_Creator.jpg?utm_source=en.wikipedia.org&utm_campaign=index&utm_content=original" alt="Igor - Tyler, the Creator" />
+    <div class="layout">
+        <img src="https://i.ytimg.com/vi/l-BmkoDP-70/maxresdefault.jpg" alt="Franklin Cicek" class="side-image">
+        <div class="game-wrap">
+            <canvas id="gameCanvas" width="420" height="640"></canvas>
+            <div class="hud">Score: <span id="score">0</span></div>
+        </div>
+        <img src="https://images.gutefrage.net/media/fragen-ergaenzungen/bilder/1931564/0_big.jpg?v=1691754203001" alt="Franklin Cicek extra" class="side-image-right">
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+
+        const birdImage = new Image();
+        birdImage.src = 'https://i.ytimg.com/vi/l-BmkoDP-70/maxresdefault.jpg';
+
+        const state = {
+            started: false,
+            gameOver: false,
+            score: 0,
+            best: 0,
+            lastTime: 0,
+            pipeTimer: 0,
+            backgroundShift: 0
+        };
+
+        const bird = {
+            x: 110,
+            y: canvas.height / 2,
+            width: 56,
+            height: 56,
+            velocity: 0,
+            gravity: 0.48,
+            flapPower: -8.3
+        };
+
+        const pipes = [];
+        let musicStarted = false;
+        let audioContext;
+        let musicGain;
+
+        function startGoofyMusic() {
+            if (musicStarted) return;
+            musicStarted = true;
+
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+
+            audioContext = new AudioCtx();
+            musicGain = audioContext.createGain();
+            musicGain.gain.value = 0.14;
+            musicGain.connect(audioContext.destination);
+
+            const notes = [440, 523.25, 659.25, 493.88, 587.33, 440, 392, 349.23];
+            const rhythm = [0.35, 0.17, 0.35, 0.25, 0.25, 0.35, 0.17, 0.5];
+            let index = 0;
+
+            function playNote(frequency, length) {
+                const osc = audioContext.createOscillator();
+                const noteGain = audioContext.createGain();
+                osc.type = 'triangle';
+                osc.frequency.value = frequency;
+                noteGain.gain.setValueAtTime(0.001, audioContext.currentTime);
+                noteGain.gain.exponentialRampToValueAtTime(0.15, audioContext.currentTime + 0.01);
+                noteGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + length);
+                osc.connect(noteGain).connect(musicGain);
+                osc.start();
+                osc.stop(audioContext.currentTime + length + 0.02);
+            }
+
+            function scheduleNext() {
+                const note = notes[index % notes.length];
+                const duration = rhythm[index % rhythm.length];
+                playNote(note, duration);
+                index += 1;
+                setTimeout(scheduleNext, duration * 1000);
+            }
+
+            scheduleNext();
+        }
+
+        function resetGame() {
+            bird.y = canvas.height / 2;
+            bird.velocity = 0;
+            pipes.length = 0;
+            state.started = false;
+            state.gameOver = false;
+            state.score = 0;
+            state.pipeTimer = 0;
+            state.backgroundShift = 0;
+            scoreEl.textContent = '0';
+        }
+
+        function flap() {
+            if (state.gameOver) {
+                resetGame();
+            }
+
+            bird.velocity = bird.flapPower;
+            state.started = true;
+        }
+
+        function spawnPipe() {
+            const gap = 170;
+            const minTopHeight = 80;
+            const maxTopHeight = canvas.height - gap - 120;
+            const topHeight = Math.random() * (maxTopHeight - minTopHeight) + minTopHeight;
+
+            pipes.push({
+                x: canvas.width + 30,
+                width: 72,
+                topHeight,
+                gap,
+                scored: false
+            });
+        }
+
+        function update(delta) {
+            if (!state.started || state.gameOver) {
+                return;
+            }
+
+            state.pipeTimer += delta;
+            state.backgroundShift += 1.2;
+
+            if (state.pipeTimer > 1400) {
+                spawnPipe();
+                state.pipeTimer = 0;
+            }
+
+            bird.velocity += bird.gravity;
+            bird.y += bird.velocity;
+
+            if (bird.y < 0) {
+                bird.y = 0;
+                bird.velocity = Math.max(0, bird.velocity);
+            }
+
+            for (const pipe of pipes) {
+                pipe.x -= 2.6;
+
+                if (!pipe.scored && pipe.x + pipe.width < bird.x) {
+                    pipe.scored = true;
+                    state.score += 1;
+                    scoreEl.textContent = state.score;
+                    state.best = Math.max(state.best, state.score);
+                }
+            }
+
+            while (pipes.length && pipes[0].x + pipes[0].width < 0) {
+                pipes.shift();
+            }
+
+            const hitGround = bird.y + bird.height >= canvas.height - 40;
+            let hitPipe = false;
+
+            for (const pipe of pipes) {
+                const withinX = bird.x + bird.width > pipe.x && bird.x < pipe.x + pipe.width;
+                const withinY = bird.y < pipe.topHeight || bird.y + bird.height > pipe.topHeight + pipe.gap;
+
+                if (withinX && withinY) {
+                    hitPipe = true;
+                    break;
+                }
+            }
+
+            if (hitGround || hitPipe) {
+                state.gameOver = true;
+                state.started = false;
+            }
+        }
+
+        function drawBackground() {
+            ctx.fillStyle = '#78d6ff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            for (let i = 0; i < 12; i++) {
+                const x = ((i * 80) - (state.backgroundShift % 80)) % (canvas.width + 80);
+                const y = 40 + (i % 5) * 70;
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.beginPath();
+                ctx.arc(x, y, 16, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            ctx.fillStyle = '#64c95d';
+            ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+        }
+
+        function drawPipes() {
+            for (const pipe of pipes) {
+                const pipeTopHeight = pipe.topHeight;
+                const pipeBottomY = pipe.topHeight + pipe.gap;
+                const pipeBottomHeight = canvas.height - (pipeBottomY + 40);
+
+                ctx.fillStyle = '#2ca02c';
+                ctx.fillRect(pipe.x, 0, pipe.width, pipeTopHeight);
+                ctx.fillRect(pipe.x - 6, pipeTopHeight - 20, pipe.width + 12, 20);
+
+                ctx.fillRect(pipe.x, pipeBottomY, pipe.width, pipeBottomHeight);
+                ctx.fillRect(pipe.x - 6, pipeBottomY, pipe.width + 12, 20);
+            }
+        }
+
+        function drawBird() {
+            const angle = Math.max(-1.2, Math.min(1.2, bird.velocity / 12));
+            ctx.save();
+            ctx.translate(bird.x + bird.width / 2, bird.y + bird.height / 2);
+            ctx.rotate(angle);
+            ctx.drawImage(birdImage, -bird.width / 2, -bird.height / 2, bird.width, bird.height);
+            ctx.restore();
+        }
+
+        function drawStartOverlay() {
+            if (state.started || state.gameOver) return;
+
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 32px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('FRANKLIN CICEK', canvas.width / 2, canvas.height / 2 - 20);
+            ctx.font = '20px Arial';
+            ctx.fillText('Press Space or Click', canvas.width / 2, canvas.height / 2 + 24);
+        }
+
+        function drawGameOverOverlay() {
+            if (!state.gameOver) return;
+
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 34px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 20);
+            ctx.font = '22px Arial';
+            ctx.fillText('Score: ' + state.score, canvas.width / 2, canvas.height / 2 + 20);
+            ctx.font = '18px Arial';
+            ctx.fillText('Click to restart', canvas.width / 2, canvas.height / 2 + 52);
+        }
+
+        function draw() {
+            drawBackground();
+            drawPipes();
+            drawBird();
+            drawStartOverlay();
+            drawGameOverOverlay();
+        }
+
+        function gameLoop(timestamp) {
+            const delta = timestamp - (state.lastTime || timestamp);
+            state.lastTime = timestamp;
+
+            update(delta);
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Space') {
+                event.preventDefault();
+                flap();
+            }
+        });
+
+        canvas.addEventListener('pointerdown', flap);
+
+        const startMusicOnInteraction = () => {
+            startGoofyMusic();
+        };
+        document.addEventListener('keydown', startMusicOnInteraction, { once: true });
+        document.addEventListener('pointerdown', startMusicOnInteraction, { once: true });
+
+        resetGame();
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
